@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "collect": "ts-node src/index.ts collect",
-    "send": "ts-node src/index.ts send"
+    "send": "ts-node src/index.ts send",
+    "list-sent": "ts-node src/index.ts list-sent"
   },
   "keywords": ["automation", "email", "scraper"],
   "author": "",

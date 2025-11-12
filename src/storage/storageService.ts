@@ -4,9 +4,11 @@ import { Company, EmailData } from '../types';
 
 export class StorageService {
   private filePath: string;
+  private sentEmailsPath: string;
 
   constructor(filePath: string = 'emails.json') {
     this.filePath = path.resolve(process.cwd(), filePath);
+    this.sentEmailsPath = path.resolve(process.cwd(), 'emailsdisparados.json');
   }
 
   async saveEmails(companies: Company[]): Promise<void> {
@@ -78,5 +80,65 @@ export class StorageService {
 
     await fs.writeFile(csvPath, headers + rows, 'utf-8');
     console.log(`Dados exportados para ${csvPath}`);
+  }
+
+  async moveSentEmails(sentEmails: string[]): Promise<void> {
+    try {
+     
+      const currentEmails = await this.loadEmails();
+
+      let sentData: EmailData = { companies: [] };
+      try {
+        const sentContent = await fs.readFile(this.sentEmailsPath, 'utf-8');
+        sentData = JSON.parse(sentContent);
+      } catch (error) {
+        console.log('Criando arquivo de emails disparados...');
+      }
+
+      const sentCompanies: Company[] = [];
+      const remainingCompanies: Company[] = [];
+
+      for (const company of currentEmails) {
+        if (sentEmails.includes(company.email)) {
+          sentCompanies.push({
+            ...company,
+            sentAt: new Date().toISOString()
+          } as any);
+        } else {
+          remainingCompanies.push(company);
+        }
+      }
+
+      sentData.companies.push(...sentCompanies);
+
+      await fs.writeFile(
+        this.sentEmailsPath,
+        JSON.stringify(sentData, null, 2),
+        'utf-8'
+      );
+
+      const remainingData: EmailData = { companies: remainingCompanies };
+      await fs.writeFile(
+        this.filePath,
+        JSON.stringify(remainingData, null, 2),
+        'utf-8'
+      );
+
+      console.log(`\n${sentCompanies.length} emails movidos para emailsdisparados.json`);
+      console.log(`${remainingCompanies.length} emails restantes em emails.json`);
+    } catch (error) {
+      console.error('Erro ao mover emails enviados:', error);
+      throw error;
+    }
+  }
+
+  async loadSentEmails(): Promise<Company[]> {
+    try {
+      const fileContent = await fs.readFile(this.sentEmailsPath, 'utf-8');
+      const data: EmailData = JSON.parse(fileContent);
+      return data.companies;
+    } catch (error) {
+      return [];
+    }
   }
 }

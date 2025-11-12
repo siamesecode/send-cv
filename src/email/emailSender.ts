@@ -73,9 +73,10 @@ export class EmailSender {
     companies: Company[],
     message: EmailMessage,
     delayMs: number = 2000
-  ): Promise<{ sent: number; failed: number }> {
+  ): Promise<{ sent: number; failed: number; sentEmails: string[] }> {
     let sent = 0;
     let failed = 0;
+    const sentEmails: string[] = [];
 
     console.log(`Iniciando envio em massa para ${companies.length} destinatários...`);
 
@@ -84,6 +85,7 @@ export class EmailSender {
       
       if (success) {
         sent++;
+        sentEmails.push(company.email);
       } else {
         failed++;
       }
@@ -97,7 +99,7 @@ export class EmailSender {
     console.log(`   Enviados: ${sent}`);
     console.log(`   Falhas: ${failed}`);
 
-    return { sent, failed };
+    return { sent, failed, sentEmails };
   }
 
   async sendTestEmail(testAddress: string, attachments?: Array<{filename: string; path: string}>): Promise<boolean> {

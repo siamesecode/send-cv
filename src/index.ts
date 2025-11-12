@@ -247,6 +247,11 @@ program
         config.sending.delayBetweenSends
       );
 
+      // Mover emails enviados para emailsdisparados.json
+      if (result.sentEmails.length > 0) {
+        await storage.moveSentEmails(result.sentEmails);
+      }
+
       console.log('\nEnvio finalizado!');
     } catch (error) {
       console.error('Erro durante o envio:', error);
@@ -283,6 +288,37 @@ program
       });
     } catch (error) {
       console.error('Erro ao listar emails:', error);
+      process.exit(1);
+    }
+  });
+
+// Comando: Listar emails disparados
+program
+  .command('list-sent')
+  .description('Listar todos os emails já disparados')
+  .action(async () => {
+    try {
+      const storage = new StorageService(config.storage.emailsFile);
+      const companies = await storage.loadSentEmails();
+
+      if (companies.length === 0) {
+        console.log('Nenhum email disparado ainda');
+        return;
+      }
+
+      console.log(`\nTotal de emails disparados: ${companies.length}\n`);
+      companies.forEach((company, index) => {
+        console.log(`${index + 1}. ${company.name}`);
+        console.log(`   Email: ${company.email}`);
+        console.log(`   Palavra-chave: ${company.keyword}`);
+        console.log(`   Coletado em: ${new Date(company.collectedAt).toLocaleString('pt-BR')}`);
+        if ((company as any).sentAt) {
+          console.log(`   Enviado em: ${new Date((company as any).sentAt).toLocaleString('pt-BR')}`);
+        }
+        console.log('');
+      });
+    } catch (error) {
+      console.error('Erro ao listar emails disparados:', error);
       process.exit(1);
     }
   });
