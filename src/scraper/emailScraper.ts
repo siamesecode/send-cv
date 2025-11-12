@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { Company } from '../types';
+import { EmailValidator } from '../utils/emailValidator';
 
 export class EmailScraper {
   private browser: Browser | null = null;
@@ -66,15 +67,23 @@ export class EmailScraper {
         for (const resultado of resultados) {
           for (const email of resultado.emails) {
             if (this.isValidBusinessEmail(email) && !foundEmailsSet.has(email)) {
-              foundEmailsSet.add(email);
-              companies.push({
-                name: this.extractCompanyName(email),
-                email: email,
-                source: resultado.site,
-                keyword: keyword,
-                collectedAt: new Date().toISOString()
-              });
-              console.log(`   Email encontrado: ${email}`);
+              // Validar se o domínio tem servidor de email (MX record)
+              console.log(`   Validando: ${email}`);
+              const isValid = await EmailValidator.isValid(email);
+              
+              if (isValid) {
+                foundEmailsSet.add(email);
+                companies.push({
+                  name: this.extractCompanyName(email),
+                  email: email,
+                  source: resultado.site,
+                  keyword: keyword,
+                  collectedAt: new Date().toISOString()
+                });
+                console.log(`   Email válido: ${email}`);
+              } else {
+                console.log(`   Email inválido (sem MX): ${email}`);
+              }
               
               if (foundEmailsSet.size >= maxResults) break;
             }
