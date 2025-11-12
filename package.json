@@ -1,0 +1,28 @@
+{
+  "name": "email-automation",
+  "version": "1.0.0",
+  "description": "Automação para coletar e enviar emails",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "collect": "ts-node src/index.ts collect",
+    "send": "ts-node src/index.ts send"
+  },
+  "keywords": ["automation", "email", "scraper"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^23.9.0",
+    "nodemailer": "^6.9.7",
+    "dotenv": "^16.3.1",
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.9.0",
+    "@types/nodemailer": "^6.4.14",
+    "typescript": "^5.2.2",
+    "ts-node": "^10.9.1"
+  }
+}
