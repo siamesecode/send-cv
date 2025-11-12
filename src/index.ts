@@ -180,7 +180,7 @@ program
       });
 
       console.log('\nDigite o conteúdo do email (HTML ou texto):');
-      console.log('(Digite uma linha vazia para finalizar)\n');
+      console.log('(Digite uma linha vazia para usar o template padrão)\n');
 
       let emailContent = '';
       let line = await rl.question('> ');
@@ -190,9 +190,19 @@ program
       }
       rl.close();
 
+      // Se não forneceu conteúdo, usar template padrão
       if (!emailContent.trim()) {
-        console.log('Conteúdo do email vazio. Operação cancelada.');
-        return;
+        const fs = require('fs');
+        const path = require('path');
+        const templatePath = path.resolve(process.cwd(), 'templates/email-template.html');
+        
+        if (fs.existsSync(templatePath)) {
+          emailContent = fs.readFileSync(templatePath, 'utf-8');
+          console.log('Usando template padrão (templates/email-template.html)');
+        } else {
+          console.log('Conteúdo do email vazio e template não encontrado. Operação cancelada.');
+          return;
+        }
       }
 
       // Preparar anexos se fornecidos
