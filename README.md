@@ -16,8 +16,6 @@ npm run send -- -t seuemail@exemplo.com -s "Assunto do Email"
 ```bash
 npm run send -- -s "Assunto do Email"
 ```
-(Carrega emails do arquivo JSON e solicita o conteúdo)
-
 
 ```bash
 npm run list
