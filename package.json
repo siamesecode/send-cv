@@ -9,7 +9,10 @@
     "dev": "ts-node src/index.ts",
     "collect": "ts-node src/index.ts collect",
     "send": "ts-node src/index.ts send",
-    "list-sent": "ts-node src/index.ts list-sent"
+    "list-sent": "ts-node src/index.ts list-sent",
+    "web": "npm run dev --prefix web",
+    "web:build": "npm run build --prefix web",
+    "web:start": "npm run start --prefix web"
   },
   "keywords": ["automation", "email", "scraper"],
   "author": "",

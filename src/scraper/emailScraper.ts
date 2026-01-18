@@ -1,11 +1,32 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
+import { EventEmitter } from 'events';
 import { Company } from '../types';
 import { EmailValidator } from '../utils/emailValidator';
 
-export class EmailScraper {
+export interface ScraperEvents {
+  'keyword-start': { keyword: string; index: number; total: number };
+  'site-visiting': { site: string; keyword: string };
+  'email-found': { email: string; company: Company };
+  'email-invalid': { email: string; reason: string };
+  'keyword-complete': { keyword: string; emailsFound: number };
+  'complete': { totalEmails: number; companies: Company[] };
+  'error': { message: string; keyword?: string };
+}
+
+export class EmailScraper extends EventEmitter {
   private browser: Browser | null = null;
+  private aborted: boolean = false;
+
+  constructor() {
+    super();
+  }
+
+  abort(): void {
+    this.aborted = true;
+  }
 
   async initialize(): Promise<void> {
+    this.aborted = false;
     this.browser = await puppeteer.launch({
       headless: false,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors']
@@ -21,8 +42,17 @@ export class EmailScraper {
     const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
     const foundEmailsSet = new Set<string>();
 
-    for (const keyword of keywords) {
+    for (let keywordIndex = 0; keywordIndex < keywords.length; keywordIndex++) {
+      if (this.aborted) {
+        this.emit('error', { message: 'Coleta cancelada pelo usuário' });
+        break;
+      }
+
+      const keyword = keywords[keywordIndex];
+      this.emit('keyword-start', { keyword, index: keywordIndex, total: keywords.length });
       console.log(`Buscando sites para: "${keyword}"`);
+      
+      let keywordEmailCount = 0;
       
       try {
         const sites = await this.buscarSitesNoGoogle(keyword);
@@ -30,6 +60,8 @@ export class EmailScraper {
 
         const resultados = await Promise.all(
           sites.map(async (site) => {
+            if (this.aborted) return { site, emails: [] };
+            
             const page = await this.browser!.newPage();
             
             try {
@@ -45,6 +77,7 @@ export class EmailScraper {
               page.on('error', () => {});
               page.on('pageerror', () => {});
 
+              this.emit('site-visiting', { site, keyword });
               console.log(`   Acessando: ${site.substring(0, 60)}...`);
 
               const emails = await this.buscarEmailsNoSite(site, page);
@@ -66,6 +99,8 @@ export class EmailScraper {
 
         for (const resultado of resultados) {
           for (const email of resultado.emails) {
+            if (this.aborted) break;
+            
             if (this.isValidBusinessEmail(email) && !foundEmailsSet.has(email)) {
               // Validar se o domínio tem servidor de email (MX record)
               console.log(`   Validando: ${email}`);
@@ -73,15 +108,19 @@ export class EmailScraper {
               
               if (isValid) {
                 foundEmailsSet.add(email);
-                companies.push({
+                const company: Company = {
                   name: this.extractCompanyName(email),
                   email: email,
                   source: resultado.site,
                   keyword: keyword,
                   collectedAt: new Date().toISOString()
-                });
+                };
+                companies.push(company);
+                keywordEmailCount++;
+                this.emit('email-found', { email, company });
                 console.log(`   Email válido: ${email}`);
               } else {
+                this.emit('email-invalid', { email, reason: 'Sem registro MX' });
                 console.log(`   Email inválido (sem MX): ${email}`);
               }
               
@@ -91,13 +130,16 @@ export class EmailScraper {
           if (foundEmailsSet.size >= maxResults) break;
         }
 
+        this.emit('keyword-complete', { keyword, emailsFound: keywordEmailCount });
         console.log(`Total de emails válidos: ${foundEmailsSet.size}`);
         
       } catch (error) {
+        this.emit('error', { message: String(error), keyword });
         console.error(`Erro ao buscar emails para "${keyword}":`, error);
       }
     }
 
+    this.emit('complete', { totalEmails: companies.length, companies });
     return companies;
   }
 

@@ -1,4 +1,5 @@
 import nodemailer, { Transporter } from 'nodemailer';
+import { EventEmitter } from 'events';
 import { Company } from '../types';
 
 export interface EmailConfig {
@@ -22,11 +23,20 @@ export interface EmailMessage {
   }>;
 }
 
-export class EmailSender {
+export interface SenderEvents {
+  'sending': { email: string; index: number; total: number };
+  'sent': { email: string; company: Company };
+  'failed': { email: string; error: string };
+  'complete': { sent: number; failed: number; sentEmails: string[] };
+}
+
+export class EmailSender extends EventEmitter {
   private transporter: Transporter;
   private config: EmailConfig;
+  private aborted: boolean = false;
 
   constructor(config: EmailConfig) {
+    super();
     this.config = config;
     this.transporter = nodemailer.createTransport({
       host: config.host,
@@ -37,6 +47,10 @@ export class EmailSender {
         pass: config.auth.pass,
       },
     });
+  }
+
+  abort(): void {
+    this.aborted = true;
   }
 
   async verifyConnection(): Promise<boolean> {
@@ -77,20 +91,31 @@ export class EmailSender {
     let sent = 0;
     let failed = 0;
     const sentEmails: string[] = [];
+    this.aborted = false;
 
     console.log(`Iniciando envio em massa para ${companies.length} destinatários...`);
 
-    for (const company of companies) {
+    for (let i = 0; i < companies.length; i++) {
+      if (this.aborted) {
+        console.log('Envio cancelado pelo usuário');
+        break;
+      }
+
+      const company = companies[i];
+      this.emit('sending', { email: company.email, index: i, total: companies.length });
+      
       const success = await this.sendEmail(company.email, message);
       
       if (success) {
         sent++;
         sentEmails.push(company.email);
+        this.emit('sent', { email: company.email, company });
       } else {
         failed++;
+        this.emit('failed', { email: company.email, error: 'Falha no envio' });
       }
 
-      if (delayMs > 0) {
+      if (delayMs > 0 && i < companies.length - 1) {
         await this.delay(delayMs);
       }
     }
@@ -99,6 +124,7 @@ export class EmailSender {
     console.log(`   Enviados: ${sent}`);
     console.log(`   Falhas: ${failed}`);
 
+    this.emit('complete', { sent, failed, sentEmails });
     return { sent, failed, sentEmails };
   }
 
