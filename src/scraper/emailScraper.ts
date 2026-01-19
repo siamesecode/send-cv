@@ -29,7 +29,12 @@ export class EmailScraper extends EventEmitter {
     this.aborted = false;
     this.browser = await puppeteer.launch({
       headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors']
+      args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled'
+      ],
+      protocolTimeout: 60000
     });
   }
 
@@ -62,17 +67,20 @@ export class EmailScraper extends EventEmitter {
           sites.map(async (site) => {
             if (this.aborted) return { site, emails: [] };
             
-            const page = await this.browser!.newPage();
+            let page;
             
             try {
-              await page.setRequestInterception(true);
-              page.on('request', (request) => {
-                if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
-                  request.abort();
-                } else {
-                  request.continue();
-                }
-              });
+              page = await this.browser!.newPage();
+              
+              // Desabilita request interception no Firefox (causa problemas)
+              // await page.setRequestInterception(true);
+              // page.on('request', (request) => {
+              //   if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
+              //     request.abort();
+              //   } else {
+              //     request.continue();
+              //   }
+              // });
 
               page.on('error', () => {});
               page.on('pageerror', () => {});
@@ -92,7 +100,13 @@ export class EmailScraper extends EventEmitter {
               console.log(`   Erro ao acessar ${site.substring(0, 40)}, pulando...`);
               return { site, emails: [] };
             } finally {
-              await page.close();
+              if (page) {
+                try {
+                  await page.close();
+                } catch (e) {
+                  // Ignora erro ao fechar página
+                }
+              }
             }
           })
         );
@@ -151,51 +165,80 @@ export class EmailScraper extends EventEmitter {
       
       await page.setViewport({ width: 1920, height: 1080 });
       
+      // Remove detecção de automação
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      });
+      
       const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(keyword)}`;
       
       console.log(`   Acessando Google...`);
-      await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-      await this.delay(5000);
+      await page.goto(searchUrl, { 
+        waitUntil: 'load', 
+        timeout: 60000 
+      });
+      
+      console.log(`   ⏳ Aguardando 15 segundos... (resolva CAPTCHA se aparecer)`);
+      // Aguarda tempo suficiente para resolver CAPTCHA manualmente se necessário
+      await this.delay(15000);
 
+      // Tenta aceitar cookies sem verificar contexto
       try {
-        await page.waitForSelector('button', { timeout: 3000 });
-        const buttons = await page.$$('button');
-        for (const button of buttons) {
-          const text = await page.evaluate(el => el.textContent || '', button);
-          if (text.includes('Aceitar') || text.includes('Accept') || text.includes('Concordo')) {
-            await button.click();
-            console.log('   Cookies aceitos');
-            await this.delay(2000);
-            break;
-          }
+        const acceptButton = await page.$('button[id*="accept"], button[id*="L2AGLb"]');
+        if (acceptButton) {
+          await acceptButton.click();
+          console.log('   Cookies aceitos');
+          await this.delay(1500);
         }
       } catch (e) {
-        console.log('   Sem popup de cookies');
+        console.log('   Sem popup de cookies ou já aceito');
       }
 
-      const sites = await page.evaluate(() => {
-        const links: string[] = [];
-        
-        const allLinks = (globalThis as any).document.querySelectorAll('a[href]');
-        
-        for (const el of allLinks) {
-          if (el.href && el.href.startsWith('http')) {
-            const url = el.href;
-            const dominiosInvalidos = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl'];
-            if (!dominiosInvalidos.some(d => url.includes(d))) {
-              try {
-                const urlObj = new URL(url);
-                if (urlObj.hostname && !urlObj.hostname.includes('google')) {
-                  links.push(url);
+      // Aguarda mais um pouco antes de extrair links
+      await this.delay(1000);
+
+      // Extrai links de forma mais segura
+      let sites: string[] = [];
+      try {
+        sites = await page.$$eval('a[href]', (anchors) => {
+          const links: string[] = [];
+          
+          for (const anchor of anchors) {
+            const href = (anchor as HTMLAnchorElement).href;
+            if (href && href.startsWith('http')) {
+              const dominiosInvalidos = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+              if (!dominiosInvalidos.some(d => href.includes(d))) {
+                try {
+                  const urlObj = new URL(href);
+                  if (urlObj.hostname && !urlObj.hostname.includes('google')) {
+                    links.push(href);
+                  }
+                } catch (e) {
+                  // URL inválida, ignora
                 }
-              } catch (e) {
               }
             }
           }
+          
+          return [...new Set(links)].slice(0, 10);
+        });
+      } catch (evalError) {
+        console.log('   Erro ao extrair links, tentando método alternativo...');
+        // Método alternativo: pegar o HTML e processar no Node
+        try {
+          const html = await page.content();
+          const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/g) || [];
+          const extractedLinks = hrefMatches
+            .map(match => match.replace(/href="|"/g, ''))
+            .filter(url => {
+              const dominiosInvalidos = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+              return !dominiosInvalidos.some(d => url.includes(d));
+            });
+          sites = [...new Set(extractedLinks)].slice(0, 10);
+        } catch (htmlError) {
+          console.log('   Método alternativo também falhou');
         }
-        
-        return [...new Set(links)].slice(0, 10);
-      });
+      }
 
       console.log(`   Links encontrados: ${sites.length}`);
       
@@ -205,7 +248,11 @@ export class EmailScraper extends EventEmitter {
       console.error('Erro ao buscar no Google:', error);
       return [];
     } finally {
-      await page.close();
+      try {
+        await page.close();
+      } catch (e) {
+        // Ignora erro ao fechar
+      }
     }
   }
 
@@ -216,8 +263,11 @@ export class EmailScraper extends EventEmitter {
         timeout: 15000 
       });
 
+      // Aguarda um pouco para garantir que a página está estável
+      await this.delay(1000);
+
       const emails = await page.evaluate(() => {
-        const textoBody = (globalThis as any).document.body.innerText;
+        const textoBody = document.body.innerText;
         const regex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
         return textoBody.match(regex) || [];
       });

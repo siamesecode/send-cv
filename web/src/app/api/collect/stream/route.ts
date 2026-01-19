@@ -103,64 +103,93 @@ export async function GET(request: NextRequest) {
         
         browser = await puppeteer.launch({
           headless: false,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors']
+          args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled'
+          ],
+          protocolTimeout: 60000
         });
 
         send('keyword-start', { keyword: fullKeyword, index: 0, total: 1 });
 
         // Search Google
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1920, height: 1080 });
+        
+        // Remove detecção de automação
+        await page.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        });
 
         const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(fullKeyword)}`;
-        send('status', { message: 'Buscando no Google...', phase: 'searching' });
+        send('status', { message: 'Buscando no Google... (resolva CAPTCHA se aparecer)', phase: 'searching' });
         
-        await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-        await delay(5000);
+        await page.goto(searchUrl, { waitUntil: 'load', timeout: 60000 });
+        send('status', { message: '⏳ Aguardando 15 segundos para verificação...', phase: 'waiting' });
+        await delay(15000);
 
-        // Handle cookies popup
+        // Handle cookies popup - método simplificado
         try {
-          await page.waitForSelector('button', { timeout: 3000 });
-          const buttons = await page.$$('button');
-          for (const button of buttons) {
-            const text = await page.evaluate(el => el.textContent || '', button);
-            if (text.includes('Aceitar') || text.includes('Accept') || text.includes('Concordo')) {
-              await button.click();
-              await delay(2000);
-              break;
-            }
+          const acceptButton = await page.$('button[id*="accept"], button[id*="L2AGLb"]');
+          if (acceptButton) {
+            await acceptButton.click();
+            await delay(1500);
           }
         } catch {
           // No cookie popup
         }
+        
+        await delay(1000);
 
-        // Extract sites from search results
-        const sites = await page.evaluate(() => {
-          const links: string[] = [];
-          const allLinks = document.querySelectorAll('a[href]');
-          const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl'];
-          
-          for (const el of allLinks) {
-            const href = (el as HTMLAnchorElement).href;
-            if (href && href.startsWith('http')) {
-              if (!invalidDomains.some(d => href.includes(d))) {
-                try {
-                  const urlObj = new URL(href);
-                  if (urlObj.hostname && !urlObj.hostname.includes('google')) {
-                    links.push(href);
+        // Extract sites from search results - método mais robusto
+        let sites: string[] = [];
+        try {
+          sites = await page.$$eval('a[href]', (anchors) => {
+            const links: string[] = [];
+            const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+            
+            for (const anchor of anchors) {
+              const href = (anchor as HTMLAnchorElement).href;
+              if (href && href.startsWith('http')) {
+                if (!invalidDomains.some(d => href.includes(d))) {
+                  try {
+                    const urlObj = new URL(href);
+                    if (urlObj.hostname && !urlObj.hostname.includes('google')) {
+                      links.push(href);
+                    }
+                  } catch {
+                    // Invalid URL
                   }
-                } catch {
-                  // Invalid URL
                 }
               }
             }
+            
+            return [...new Set(links)].slice(0, 10);
+          });
+        } catch (evalError) {
+          // Método alternativo: pegar o HTML e processar
+          try {
+            const html = await page.content();
+            const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/g) || [];
+            const extractedLinks = hrefMatches
+              .map(match => match.replace(/href="|"/g, ''))
+              .filter(url => {
+                const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+                return !invalidDomains.some(d => url.includes(d));
+              });
+            sites = [...new Set(extractedLinks)].slice(0, 10);
+          } catch {
+            // Falhou também
           }
-          
-          return [...new Set(links)].slice(0, 10);
-        });
+        }
 
-        await page.close();
+        try {
+          await page.close();
+        } catch {
+          // Ignora erro ao fechar
+        }
 
         send('status', { message: `Encontrados ${sites.length} sites para visitar`, phase: 'visiting' });
 
@@ -172,25 +201,35 @@ export async function GET(request: NextRequest) {
 
           send('site-visiting', { site, keyword: fullKeyword });
 
-          const sitePage = await browser.newPage();
+          let sitePage;
           
           try {
-            await sitePage.setRequestInterception(true);
-            sitePage.on('request', (req) => {
-              if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-                req.abort();
-              } else {
-                req.continue();
-              }
-            });
+            sitePage = await browser.newPage();
+            
+            // Não usa request interception - causa problemas de contexto
+            sitePage.on('error', () => {});
+            sitePage.on('pageerror', () => {});
 
             await sitePage.goto(site, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await delay(500);
 
-            const emails = await sitePage.evaluate(() => {
-              const text = document.body.innerText;
-              const regex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
-              return text.match(regex) || [];
-            });
+            let emails: string[] = [];
+            try {
+              emails = await sitePage.$$eval('body', (bodies) => {
+                const text = bodies[0]?.innerText || '';
+                const regex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+                return text.match(regex) || [];
+              });
+            } catch {
+              // Se falhar, tenta extrair do HTML
+              try {
+                const html = await sitePage.content();
+                const emailMatches = html.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || [];
+                emails = [...new Set(emailMatches)];
+              } catch {
+                // Ignora
+              }
+            }
 
             for (const email of emails) {
               if (foundEmails.size >= maxResults) break;
@@ -220,7 +259,13 @@ export async function GET(request: NextRequest) {
           } catch {
             // Error visiting site
           } finally {
-            await sitePage.close();
+            if (sitePage) {
+              try {
+                await sitePage.close();
+              } catch {
+                // Ignora erro ao fechar
+              }
+            }
           }
         }
 
