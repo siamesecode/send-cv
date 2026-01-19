@@ -52,12 +52,20 @@ export async function GET() {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
-    const emptyData: EmailData = { companies: [] };
-    await fs.writeFile(emailsPath, JSON.stringify(emptyData, null, 2), 'utf-8');
+    const { searchParams } = new URL(request.url);
+    const type = searchParams.get('type') || 'pending';
     
-    return NextResponse.json({ message: 'Emails limpos com sucesso' });
+    const emptyData: EmailData = { companies: [] };
+    
+    if (type === 'sent') {
+      await fs.writeFile(sentEmailsPath, JSON.stringify(emptyData, null, 2), 'utf-8');
+      return NextResponse.json({ message: 'Emails enviados limpos com sucesso' });
+    } else {
+      await fs.writeFile(emailsPath, JSON.stringify(emptyData, null, 2), 'utf-8');
+      return NextResponse.json({ message: 'Emails pendentes limpos com sucesso' });
+    }
   } catch (error) {
     return NextResponse.json(
       { error: 'Erro ao limpar emails' },

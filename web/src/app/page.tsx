@@ -40,15 +40,16 @@ export default function Home() {
   // Config state
   const [termosBusca, setTermosBusca] = useState<string[]>([]);
   const [cidades, setCidades] = useState<string[]>([]);
-  const [selectedTermo, setSelectedTermo] = useState<string>('');
+  const [selectedTermos, setSelectedTermos] = useState<string[]>([]);
+  const [termoInput, setTermoInput] = useState<string>('');
   const [selectedCidade, setSelectedCidade] = useState<string>('');
-  const [customKeyword, setCustomKeyword] = useState<string>('');
   const [maxResults, setMaxResults] = useState<string>('10');
 
   // Emails state
   const [pendingEmails, setPendingEmails] = useState<Company[]>([]);
   const [sentEmails, setSentEmails] = useState<Company[]>([]);
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<'pending' | 'sent'>('pending');
 
   // Operation state
   const [isCollecting, setIsCollecting] = useState(false);
@@ -67,9 +68,6 @@ export default function Home() {
       .then(data => {
         setTermosBusca(data.termosBusca);
         setCidades(data.cidades);
-        if (data.termosBusca.length > 0) {
-          setSelectedTermo(data.termosBusca[0]);
-        }
       });
   }, []);
 
@@ -89,19 +87,42 @@ export default function Home() {
     setLogs(prev => [...prev, { type, message, timestamp: new Date() }]);
   };
 
+  const addTermo = (termo: string) => {
+    if (termo.trim() && !selectedTermos.includes(termo.trim())) {
+      setSelectedTermos([...selectedTermos, termo.trim()]);
+      setTermoInput('');
+    }
+  };
+
+  const removeTermo = (termo: string) => {
+    setSelectedTermos(selectedTermos.filter(t => t !== termo));
+  };
+
+  const handleTermoKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && termoInput.trim()) {
+      e.preventDefault();
+      addTermo(termoInput);
+    }
+  };
+
   const handleCollect = async () => {
+    if (selectedTermos.length === 0) {
+      addLog('error', 'Adicione pelo menos um termo de busca');
+      return;
+    }
+
     setIsCollecting(true);
     setProgress(0);
     setLogs([]);
 
-    const keyword = customKeyword || selectedTermo;
+    const keyword = selectedTermos.join(' | ');
     const params = new URLSearchParams({
       keyword,
       maxResults,
       ...(selectedCidade && { cidade: selectedCidade }),
     });
 
-    addLog('info', `Iniciando coleta: "${keyword}"${selectedCidade ? ` em ${selectedCidade}` : ''}`);
+    addLog('info', `Iniciando coleta com ${selectedTermos.length} termo(s)${selectedCidade ? ` em ${selectedCidade}` : ''}`);
 
     const eventSource = new EventSource(`/api/collect/stream?${params}`);
 
@@ -237,11 +258,27 @@ export default function Home() {
     }
   };
 
-  const handleClearEmails = async () => {
+  const handleClearPending = async () => {
     if (confirm('Tem certeza que deseja limpar todos os emails pendentes?')) {
-      await fetch('/api/emails', { method: 'DELETE' });
+      await fetch('/api/emails?type=pending', { method: 'DELETE' });
       loadEmails();
-      addLog('info', 'Emails limpos');
+      addLog('info', 'Emails pendentes limpos');
+    }
+  };
+
+  const handleClearSent = async () => {
+    if (confirm('Tem certeza que deseja limpar todos os emails enviados?')) {
+      await fetch('/api/emails?type=sent', { method: 'DELETE' });
+      loadEmails();
+      addLog('info', 'Emails enviados limpos');
+    }
+  };
+
+  const handleClearEmails = () => {
+    if (activeTab === 'pending') {
+      handleClearPending();
+    } else {
+      handleClearSent();
     }
   };
 
@@ -266,10 +303,8 @@ export default function Home() {
   return (
     <main className="container mx-auto p-6 max-w-7xl">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Send CV - Automação de Emails</h1>
-        <p className="text-muted-foreground">
-          Colete emails de empresas e envie seu currículo automaticamente
-        </p>
+        
+       
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -284,19 +319,30 @@ export default function Home() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Termo de Busca</Label>
-                <Select value={selectedTermo} onValueChange={setSelectedTermo}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione um termo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {termosBusca.map((termo) => (
-                      <SelectItem key={termo} value={termo}>
-                        {termo}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Termos de Busca</Label>
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Digite e pressione Enter para adicionar"
+                    value={termoInput}
+                    onChange={(e) => setTermoInput(e.target.value)}
+                    onKeyDown={handleTermoKeyDown}
+                  />
+                  {selectedTermos.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedTermos.map((termo) => (
+                        <Badge key={termo} variant="secondary" className="px-2 py-1">
+                          {termo}
+                          <button
+                            onClick={() => removeTermo(termo)}
+                            className="ml-2 hover:text-destructive"
+                          >
+                            ✕
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -317,23 +363,25 @@ export default function Home() {
               </div>
 
               <div className="space-y-2">
-                <Label>Termo Customizado (sobrescreve seleção)</Label>
-                <Input
-                  placeholder="Ex: empresa de marketing"
-                  value={customKeyword}
-                  onChange={(e) => setCustomKeyword(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-2">
                 <Label>Máximo de Resultados</Label>
                 <Input
                   type="number"
                   value={maxResults}
-                  onChange={(e) => setMaxResults(e.target.value)}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value);
+                    if (value > 100) {
+                      addLog('warning', 'Máximo de resultados não pode ultrapassar 100');
+                      setMaxResults('100');
+                    } else {
+                      setMaxResults(e.target.value);
+                    }
+                  }}
                   min="1"
-                  max="50"
+                  max="100"
                 />
+                {parseInt(maxResults) > 100 && (
+                  <p className="text-sm text-red-600">Máximo permitido: 100</p>
+                )}
               </div>
 
               {isCollecting && (
@@ -363,11 +411,11 @@ export default function Home() {
             <CardContent>
               <div className="grid grid-cols-2 gap-4">
                 <div className="text-center">
-                  <p className="text-3xl font-bold text-blue-600">{pendingEmails.length}</p>
+                  <p className="text-3xl font-bold">{pendingEmails.length}</p>
                   <p className="text-sm text-muted-foreground">Pendentes</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-3xl font-bold text-green-600">{sentEmails.length}</p>
+                  <p className="text-3xl font-bold">{sentEmails.length}</p>
                   <p className="text-sm text-muted-foreground">Enviados</p>
                 </div>
               </div>
@@ -392,7 +440,7 @@ export default function Home() {
                     variant="outline" 
                     size="sm"
                     onClick={handleClearEmails}
-                    disabled={pendingEmails.length === 0}
+                    disabled={(activeTab === 'pending' && pendingEmails.length === 0) || (activeTab === 'sent' && sentEmails.length === 0)}
                   >
                     Limpar
                   </Button>
@@ -449,7 +497,7 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="pending">
+              <Tabs defaultValue="pending" onValueChange={(value) => setActiveTab(value as 'pending' | 'sent')}>
                 <TabsList className="mb-4">
                   <TabsTrigger value="pending">
                     Pendentes <Badge variant="secondary" className="ml-2">{pendingEmails.length}</Badge>
