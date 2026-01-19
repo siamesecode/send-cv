@@ -30,7 +30,7 @@ Crie um arquivo `.env` na raiz do projeto com as seguintes variáveis:
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=seuemail@gmail.com
-SMTP_PASS=suasenha
+SMTP_PASS=suasenha // Senha de aplicativo (pesquisar o que é isso para criar)
 ```
 
 ## Execução
