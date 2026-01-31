@@ -86,7 +86,8 @@ export async function GET(request: NextRequest) {
   const cidade = searchParams.get('cidade');
   const maxResults = parseInt(searchParams.get('maxResults') || '10');
 
-  const fullKeyword = cidade ? `${keyword} em ${cidade}` : `${keyword} Brasil`;
+  // Separa keywords se vierem com " | "
+  const keywords = keyword.split(' | ').map(k => k.trim()).filter(k => k.length > 0);
 
   const encoder = new TextEncoder();
   
@@ -97,6 +98,8 @@ export async function GET(request: NextRequest) {
       };
 
       let browser: Browser | null = null;
+      const allCompanies: Company[] = [];
+      const foundEmails = new Set<string>();
       
       try {
         send('status', { message: 'Iniciando navegador...', phase: 'init' });
@@ -111,9 +114,7 @@ export async function GET(request: NextRequest) {
           protocolTimeout: 60000
         });
 
-        send('keyword-start', { keyword: fullKeyword, index: 0, total: 1 });
-
-        // Search Google
+        // Página principal que será reusada
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1920, height: 1080 });
@@ -123,80 +124,101 @@ export async function GET(request: NextRequest) {
           Object.defineProperty(navigator, 'webdriver', { get: () => false });
         });
 
-        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(fullKeyword)}`;
-        send('status', { message: 'Buscando no Google... (resolva CAPTCHA se aparecer)', phase: 'searching' });
-        
-        await page.goto(searchUrl, { waitUntil: 'load', timeout: 60000 });
-        send('status', { message: '⏳ Aguardando 15 segundos para verificação...', phase: 'waiting' });
-        await delay(15000);
-
-        // Handle cookies popup - método simplificado
-        try {
-          const acceptButton = await page.$('button[id*="accept"], button[id*="L2AGLb"]');
-          if (acceptButton) {
-            await acceptButton.click();
-            await delay(1500);
+        // Processa cada keyword separadamente
+        for (let i = 0; i < keywords.length; i++) {
+          if (foundEmails.size >= maxResults) {
+            send('status', { message: `Limite de ${maxResults} emails atingido!`, phase: 'complete' });
+            break;
           }
-        } catch {
-          // No cookie popup
-        }
-        
-        await delay(1000);
 
-        // Extract sites from search results - método mais robusto
-        let sites: string[] = [];
-        try {
-          sites = await page.$$eval('a[href]', (anchors) => {
-            const links: string[] = [];
-            const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+          const currentKeyword = keywords[i];
+          const fullKeyword = cidade && cidade !== 'all' 
+            ? `${currentKeyword} em ${cidade}` 
+            : `${currentKeyword} Brasil`;
+
+          send('keyword-start', { keyword: fullKeyword, index: i, total: keywords.length });
+
+          // Delay entre keywords (exceto a primeira)
+          if (i > 0) {
+            const delayTime = 5000 + Math.random() * 5000; // 5-10 segundos
+            send('status', { message: `⏳ Aguardando ${Math.round(delayTime/1000)}s antes da próxima busca...`, phase: 'waiting' });
+            await delay(delayTime);
+          }
+
+          // Busca no Google
+          const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(fullKeyword + ' contato email')}&num=30`;
+          send('status', { message: `🔍 Buscando: ${currentKeyword}... (resolva CAPTCHA se aparecer)`, phase: 'searching' });
+          
+          try {
+            await page.goto(searchUrl, { waitUntil: 'load', timeout: 60000 });
             
-            for (const anchor of anchors) {
-              const href = (anchor as HTMLAnchorElement).href;
-              if (href && href.startsWith('http')) {
-                if (!invalidDomains.some(d => href.includes(d))) {
-                  try {
-                    const urlObj = new URL(href);
-                    if (urlObj.hostname && !urlObj.hostname.includes('google')) {
-                      links.push(href);
+            // Primeira busca aguarda mais tempo para CAPTCHA
+            if (i === 0) {
+              send('status', { message: '⏳ Aguardando 15 segundos para verificação inicial...', phase: 'waiting' });
+              await delay(15000);
+              
+              // Handle cookies popup
+              try {
+                const acceptButton = await page.$('button[id*="accept"], button[id*="L2AGLb"]');
+                if (acceptButton) {
+                  await acceptButton.click();
+                  await delay(1500);
+                }
+              } catch {
+                // No cookie popup
+              }
+            } else {
+              // Buscas subsequentes aguardam menos
+              await delay(3000);
+            }
+
+            // Extract sites from search results
+            let sites: string[] = [];
+            try {
+              sites = await page.$$eval('a[href]', (anchors) => {
+                const links: string[] = [];
+                const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+                
+                for (const anchor of anchors) {
+                  const href = (anchor as HTMLAnchorElement).href;
+                  if (href && href.startsWith('http')) {
+                    if (!invalidDomains.some(d => href.includes(d))) {
+                      try {
+                        const urlObj = new URL(href);
+                        if (urlObj.hostname && !urlObj.hostname.includes('google')) {
+                          links.push(href);
+                        }
+                      } catch {
+                        // Invalid URL
+                      }
                     }
-                  } catch {
-                    // Invalid URL
                   }
                 }
+                
+                return [...new Set(links)].slice(0, 30);
+              });
+            } catch {
+              // Método alternativo
+              try {
+                const html = await page.content();
+                const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/g) || [];
+                const extractedLinks = hrefMatches
+                  .map(match => match.replace(/href="|"/g, ''))
+                  .filter(url => {
+                    const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
+                    return !invalidDomains.some(d => url.includes(d));
+                  });
+                sites = [...new Set(extractedLinks)].slice(0, 30);
+              } catch {
+                // Falhou
               }
             }
-            
-            return [...new Set(links)].slice(0, 10);
-          });
-        } catch (evalError) {
-          // Método alternativo: pegar o HTML e processar
-          try {
-            const html = await page.content();
-            const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/g) || [];
-            const extractedLinks = hrefMatches
-              .map(match => match.replace(/href="|"/g, ''))
-              .filter(url => {
-                const invalidDomains = ['google', 'facebook', 'youtube', 'instagram', 'twitter', 'linkedin', 'gstatic', 'maps.goo.gl', 'webcache'];
-                return !invalidDomains.some(d => url.includes(d));
-              });
-            sites = [...new Set(extractedLinks)].slice(0, 10);
-          } catch {
-            // Falhou também
-          }
-        }
 
-        try {
-          await page.close();
-        } catch {
-          // Ignora erro ao fechar
-        }
+            send('status', { message: `📋 Encontrados ${sites.length} sites para "${currentKeyword}"`, phase: 'visiting' });
 
-        send('status', { message: `Encontrados ${sites.length} sites para visitar`, phase: 'visiting' });
-
-        const companies: Company[] = [];
-        const foundEmails = new Set<string>();
-
-        for (const site of sites) {
+            // Visita os sites desta keyword
+            for (const site of sites) {
+              if (foundEmails.size >= maxResults) break;
           if (foundEmails.size >= maxResults) break;
 
           send('site-visiting', { site, keyword: fullKeyword });
@@ -214,6 +236,8 @@ export async function GET(request: NextRequest) {
             await delay(500);
 
             let emails: string[] = [];
+            
+            // Busca emails na página principal
             try {
               emails = await sitePage.$$eval('body', (bodies) => {
                 const text = bodies[0]?.innerText || '';
@@ -228,6 +252,26 @@ export async function GET(request: NextRequest) {
                 emails = [...new Set(emailMatches)];
               } catch {
                 // Ignora
+              }
+            }
+
+            // Se não encontrou emails, tenta buscar na página de contato
+            if (emails.length === 0) {
+              try {
+                const contactLink = await sitePage.$('a[href*="contato"], a[href*="contact"], a[href*="fale-conosco"], a[href*="fale_conosco"]');
+                if (contactLink) {
+                  await contactLink.click();
+                  await delay(2000);
+                  
+                  const contactEmails = await sitePage.$$eval('body', (bodies) => {
+                    const text = bodies[0]?.innerText || '';
+                    const regex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+                    return text.match(regex) || [];
+                  });
+                  emails = contactEmails;
+                }
+              } catch {
+                // Ignora erro ao buscar página de contato
               }
             }
 
@@ -248,7 +292,7 @@ export async function GET(request: NextRequest) {
                     keyword: fullKeyword,
                     collectedAt: new Date().toISOString(),
                   };
-                  companies.push(company);
+                  allCompanies.push(company);
                   
                   send('email-found', { email, company });
                 } else {
@@ -269,13 +313,26 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        // Save emails
-        if (companies.length > 0) {
-          await saveEmails(companies);
+            send('keyword-complete', { keyword: fullKeyword, emailsFound: allCompanies.length });
+            
+          } catch (keywordError) {
+            send('status', { message: `⚠️ Erro na busca de "${currentKeyword}": ${keywordError}`, phase: 'error' });
+          }
+        } // fim do loop de keywords
+
+        // Fecha a página principal
+        try {
+          await page.close();
+        } catch {
+          // Ignora erro ao fechar
         }
 
-        send('keyword-complete', { keyword: fullKeyword, emailsFound: companies.length });
-        send('complete', { totalEmails: companies.length, companies });
+        // Save all emails
+        if (allCompanies.length > 0) {
+          await saveEmails(allCompanies);
+        }
+
+        send('complete', { totalEmails: allCompanies.length, companies: allCompanies });
 
       } catch (error) {
         send('error', { message: String(error) });

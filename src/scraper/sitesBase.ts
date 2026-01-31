@@ -18,6 +18,10 @@ export function gerarSitesPorPalavraChave(keyword: string): string[] {
     sites.push('https://www.google.com.br/maps/search/empresa+tecnologia+rio+de+janeiro');
   }
   
+  if (keyword.toLowerCase().includes('santarém') || keyword.toLowerCase().includes('santarem')) {
+    sites.push('https://www.google.com.br/maps/search/empresa+tecnologia+santarém+pa');
+  }
+  
   // Sites genéricos com a palavra-chave
   sites.push(`https://www.google.com/search?q=site:*.com.br+${encodeURIComponent(keyword)}+contato+email`);
   

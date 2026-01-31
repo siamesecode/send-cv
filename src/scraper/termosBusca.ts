@@ -52,7 +52,8 @@ export const cidadesPrincipais = [
   'Fortaleza',
   'Campinas',
   'São José dos Campos',
-  'Ribeirão Preto'
+  'Ribeirão Preto',
+  'Santarém'
 ];
 
 
